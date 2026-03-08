@@ -1,0 +1,109 @@
+name: "Aithon Security Scan"
+description: "Scan AI agent workspaces for security vulnerabilities"
+author: "Gregor D"
+
+branding:
+  icon: "shield"
+  color: "green"
+
+inputs:
+  target:
+    description: "Path to scan (default: current directory)"
+    required: false
+    default: "."
+  agent:
+    description: "Agent type: openclaw, auto"
+    required: false
+    default: "auto"
+  severity:
+    description: "Minimum severity to report: low, medium, high, critical"
+    required: false
+    default: "low"
+  fail-on:
+    description: "Fail the action if findings at this severity or above: low, medium, high, critical, none"
+    required: false
+    default: "critical"
+  output:
+    description: "Report output file path (json or md)"
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install Aithon
+      shell: bash
+      run: pip install aithon
+
+    - name: Run scan
+      id: scan
+      shell: bash
+      run: |
+        set +e
+
+        ARGS="scan ${{ inputs.target }} --no-tui --severity ${{ inputs.severity }} --agent ${{ inputs.agent }}"
+
+        if [ -n "${{ inputs.output }}" ]; then
+          ARGS="$ARGS -o ${{ inputs.output }}"
+        fi
+
+        # Run scan and capture output
+        OUTPUT=$(aithon $ARGS 2>&1)
+        EXIT_CODE=$?
+        echo "$OUTPUT"
+
+        # Extract counts from output
+        CRITICAL=$(echo "$OUTPUT" | grep -oP 'CRITICAL: \K[0-9]+' || echo "0")
+        HIGH=$(echo "$OUTPUT" | grep -oP 'HIGH: \K[0-9]+' || echo "0")
+        MEDIUM=$(echo "$OUTPUT" | grep -oP 'MEDIUM: \K[0-9]+' || echo "0")
+        LOW=$(echo "$OUTPUT" | grep -oP 'LOW: \K[0-9]+' || echo "0")
+
+        echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+        echo "high=$HIGH" >> $GITHUB_OUTPUT
+        echo "medium=$MEDIUM" >> $GITHUB_OUTPUT
+        echo "low=$LOW" >> $GITHUB_OUTPUT
+
+        # Determine if we should fail
+        FAIL_ON="${{ inputs.fail-on }}"
+        SHOULD_FAIL=0
+
+        if [ "$FAIL_ON" = "critical" ] && [ "$CRITICAL" -gt 0 ]; then
+          SHOULD_FAIL=1
+        elif [ "$FAIL_ON" = "high" ] && [ $((CRITICAL + HIGH)) -gt 0 ]; then
+          SHOULD_FAIL=1
+        elif [ "$FAIL_ON" = "medium" ] && [ $((CRITICAL + HIGH + MEDIUM)) -gt 0 ]; then
+          SHOULD_FAIL=1
+        elif [ "$FAIL_ON" = "low" ] && [ $((CRITICAL + HIGH + MEDIUM + LOW)) -gt 0 ]; then
+          SHOULD_FAIL=1
+        fi
+
+        if [ "$SHOULD_FAIL" -eq 1 ]; then
+          echo "::error::Aithon found security issues at or above '$FAIL_ON' severity"
+          exit 1
+        fi
+
+    - name: Upload report
+      if: inputs.output != '' && always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: aithon-report
+        path: ${{ inputs.output }}
+
+outputs:
+  critical:
+    description: "Number of critical findings"
+    value: ${{ steps.scan.outputs.critical }}
+  high:
+    description: "Number of high findings"
+    value: ${{ steps.scan.outputs.high }}
+  medium:
+    description: "Number of medium findings"
+    value: ${{ steps.scan.outputs.medium }}
+  low:
+    description: "Number of low findings"
+    value: ${{ steps.scan.outputs.low }}

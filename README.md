@@ -27,15 +27,17 @@ Scans AI agent workspaces for security vulnerabilities:
 - **Backup Scanning** — Finds secrets that leaked into backup archives
 - **Injection Detection** — Identifies prompt injection attack surfaces in workspace files
 - **Network Exposure** — Detects agent endpoints listening on public interfaces
+- **Watch Mode** — Continuous monitoring with Telegram alerts on new findings
+- **Fix Plan** — Generates a reviewable remediation bash script
 
 ## Supported Agents
 
 | Agent | Status |
 |-------|--------|
 | OpenClaw | ✅ Full support |
-| Cline | 🔜 v0.2 |
-| Aider | 🔜 v0.2 |
-| Generic | 🔜 v0.3 |
+| Cline | 🔜 Planned |
+| Aider | 🔜 Planned |
+| Generic | 🔜 Planned |
 
 ## Install
 
@@ -53,22 +55,74 @@ pip install -e .
 
 ## Usage
 
-### TUI Mode (retro CRT terminal interface)
+### One-shot scan
 
 ```bash
+# TUI mode (retro CRT terminal interface)
 aithon scan /path/to/agent/workspace
-```
 
-### Headless Mode
-
-```bash
+# Headless mode
 aithon scan /path/to/workspace --no-tui
 aithon scan /path/to/workspace --no-tui --severity high
 aithon scan /path/to/workspace --no-tui -o report.json
-aithon scan /path/to/workspace --no-tui -o report.md
 ```
 
-### List Supported Agents
+### Watch mode (continuous monitoring)
+
+```bash
+# Scan every hour, alert via Telegram on HIGH+ findings
+aithon watch /root/.openclaw \
+  --interval 3600 \
+  --telegram-token "YOUR_BOT_TOKEN" \
+  --telegram-chat-id "YOUR_CHAT_ID"
+
+# Or use environment variables
+export AITHON_TELEGRAM_TOKEN="your-token"
+export AITHON_TELEGRAM_CHAT_ID="your-chat-id"
+aithon watch /root/.openclaw --interval 1800
+```
+
+Watch mode keeps a state file (`.aithon-state.json`) and only alerts on **new** findings — no spam on known issues.
+
+### Fix plan (remediation script)
+
+```bash
+# Print remediation script to stdout
+aithon fix-plan /root/.openclaw
+
+# Save to file, review, then run
+aithon fix-plan /root/.openclaw -o fix.sh
+less fix.sh        # review it
+bash fix.sh        # run it
+```
+
+The fix plan separates auto-fixable issues (chmod) from manual ones (key rotation, config changes) and generates commented bash with explanations.
+
+### GitHub Action
+
+Add to your workflow:
+
+```yaml
+- name: Aithon Security Scan
+  uses: politologhse/aithon@main
+  with:
+    target: "."
+    severity: "low"
+    fail-on: "critical"     # fail CI on critical findings
+    output: "report.json"   # upload as artifact
+```
+
+Inputs:
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `target` | `.` | Path to scan |
+| `agent` | `auto` | Agent type |
+| `severity` | `low` | Min severity to report |
+| `fail-on` | `critical` | Fail CI at this severity (`none` to never fail) |
+| `output` | — | Report file path (json/md) |
+
+### List supported agents
 
 ```bash
 aithon agents
@@ -78,18 +132,15 @@ aithon agents
 
 ```
 ╭──── AITHON SCAN RESULTS ────╮
-│ 7 issues found               │
-│ CRITICAL: 3 | HIGH: 2 | MED: 2 │
+│ 17 issues found              │
+│ CRITICAL: 11 | HIGH: 5 | LOW: 1 │
 ╰──────────────────────────────╯
 
  SEV   ID       Title                          File                  Module
- ✖     SEC-001  OpenAI API Key in models.json  .openclaw/models.json secrets
- ✖     INJ-001  World-writable AGENTS.md       ./AGENTS.md           injection
- ✖     SEC-002  Anthropic Key in auth-profiles auth-profiles.json    secrets
+ ✖     SEC-001  Telegram Bot Token in config   openclaw-modified.json secrets
+ ✖     SEC-002  Private Key Block in device    device.json           secrets
  ◆     PERM-001 World-readable auth-profiles   auth-profiles.json    permissions
- ◆     BAK-001  Secret in backup: OpenRouter   backup/old-config.json backup_scan
- ▲     CFG-001  Hardcoded credential: api_key  .openclaw/models.json config_audit
- ▲     CFG-002  Overly permissive: anthropic   .openclaw/models.json config_audit
+ ◆     NET-001  Admin Panel on 0.0.0.0:8921    —                     network
 ```
 
 ## Development
@@ -113,7 +164,7 @@ class MyAgentProfile(BaseAgentProfile):
     @property
     def name(self) -> str:
         return "my_agent"
-    
+
     def detect(self, target):
         ...
 ```
