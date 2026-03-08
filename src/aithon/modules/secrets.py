@@ -18,6 +18,7 @@ class SecretsModule(BaseModule):
 
     def scan(self) -> list[Finding]:
         findings: list[Finding] = []
+        seen_secrets: set[str] = set()
         scan_paths = self.agent.get_secret_scan_paths(self.config.target)
 
         for file_path in scan_paths:
@@ -37,6 +38,11 @@ class SecretsModule(BaseModule):
                         redacted = "****"
 
                     line_num = content[:match.start()].count("\n") + 1
+
+                    # Deduplicate by actual secret value
+                    if secret in seen_secrets:
+                        continue
+                    seen_secrets.add(secret)
 
                     findings.append(Finding(
                         id=f"SEC-{len(findings) + 1:03d}",

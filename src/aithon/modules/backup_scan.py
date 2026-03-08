@@ -19,6 +19,7 @@ class BackupScanModule(BaseModule):
     def scan(self) -> list[Finding]:
         findings: list[Finding] = []
         backup_paths = self.agent.get_backup_paths(self.config.target)
+        hits: dict[str, list[str]] = {}
 
         for backup_dir in backup_paths:
             if not backup_dir.is_dir():
@@ -31,29 +32,31 @@ class BackupScanModule(BaseModule):
                     continue
 
                 try:
-                    content = file_path.read_text(errors="ignore")
+                    file_content = file_path.read_text(errors="ignore")
                 except (PermissionError, OSError):
                     continue
 
                 for pattern_name, pattern in SECRET_PATTERNS.items():
-                    if re.search(pattern, content):
-                        findings.append(Finding(
-                            id=f"BAK-{len(findings) + 1:03d}",
-                            title=f"Secret in backup: {pattern_name}",
-                            severity=Severity.HIGH,
-                            module=self.name,
-                            description=(
-                                f"Backup file contains {pattern_name}. "
-                                "Backups often retain secrets that were removed from "
-                                "production configs, creating a false sense of security."
-                            ),
-                            file_path=str(file_path),
-                            evidence=f"Found in: {file_path.relative_to(backup_dir)}",
-                            remediation=(
-                                "Clean backup files of secrets. Use `ocback` snapshots "
-                                "that exclude sensitive env vars, or encrypt backups."
-                            ),
-                        ))
+                    if re.search(pattern, file_content):
+                        hits.setdefault(pattern_name, []).append(str(file_path))
                         break
+
+        for pattern_name, files in hits.items():
+            findings.append(Finding(
+                id=f"BAK-{len(findings) + 1:03d}",
+                title=f"Secret in backups: {pattern_name} ({len(files)} files)",
+                severity=Severity.HIGH,
+                module=self.name,
+                description=(
+                    f"{pattern_name} found in {len(files)} backup file(s). "
+                    "Backups often retain secrets removed from production configs."
+                ),
+                file_path=files[0],
+                evidence=f"{len(files)} backup files contain this secret type",
+                remediation=(
+                    "Clean backup files of secrets. Use `ocback` snapshots "
+                    "that exclude sensitive env vars, or encrypt backups."
+                ),
+            ))
 
         return findings

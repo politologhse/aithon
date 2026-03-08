@@ -1,9 +1,9 @@
 """Regex patterns for secret detection."""
 
 SECRET_PATTERNS: dict[str, str] = {
-    "OpenAI API Key": r"sk-[a-zA-Z0-9]{20,}",
+    "OpenAI API Key": r"sk-(?!ant-|or-|cp-)[a-zA-Z0-9]{32,}",
     "Anthropic API Key": r"sk-ant-[a-zA-Z0-9\-]{20,}",
-    "DeepSeek API Key": r"sk-[a-f0-9]{32,}",
+    "DeepSeek API Key": r"sk-(?!ant-|or-|cp-)[a-f0-9]{48,}",
     "AWS Access Key": r"AKIA[0-9A-Z]{16}",
     "AWS Secret Key": r"(?i)aws_secret_access_key\s*[=:]\s*[A-Za-z0-9/+=]{40}",
     "Google API Key": r"AIza[0-9A-Za-z\-_]{35}",

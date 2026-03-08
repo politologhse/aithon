@@ -1,5 +1,5 @@
 """Main scan orchestrator."""
-from aithon.config import ScanConfig
+from aithon.config import ScanConfig, Severity
 from aithon.core.finding import Finding
 from aithon.modules.base import BaseModule
 from aithon.agents.base import BaseAgentProfile
@@ -70,7 +70,7 @@ class Scanner:
                 self.findings.append(Finding(
                     id="ERR-000",
                     title=f"Module {module.name} failed",
-                    severity=1,
+                    severity=Severity.LOW,
                     module=module.name,
                     description=f"Module crashed: {e}",
                     remediation="Check module logs",

@@ -30,7 +30,8 @@ class ConfigAuditModule(BaseModule):
 
             try:
                 data = json.loads(content)
-                findings.extend(self._audit_json_config(cfg_path, data))
+                if isinstance(data, dict):
+                    findings.extend(self._audit_json_config(cfg_path, data))
             except json.JSONDecodeError:
                 findings.extend(self._audit_text_config(cfg_path, content))
 

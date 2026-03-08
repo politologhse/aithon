@@ -18,8 +18,16 @@ class EnvLeakModule(BaseModule):
         findings: list[Finding] = []
         target = self.config.target
 
-        env_files = list(target.rglob(".env")) + list(target.rglob(".env.*"))
-        env_files += list(target.rglob("*.env"))
+        skip_dirs = {"snapshots", "backup", "temp_skills", ".git", "node_modules"}
+        env_files_raw = (
+            list(target.rglob(".env"))
+            + list(target.rglob(".env.*"))
+            + list(target.rglob("*.env"))
+        )
+        env_files = [
+            f for f in env_files_raw
+            if not any(skip in f.parts for skip in skip_dirs)
+        ]
 
         for env_file in env_files:
             if not env_file.is_file():
