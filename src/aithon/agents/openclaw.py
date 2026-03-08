@@ -17,7 +17,13 @@ class OpenClawProfile(BaseAgentProfile):
             Path.home() / ".openclaw",
             Path("/root/.openclaw"),
         ]
-        return any(p.exists() for p in indicators)
+        def _safe_exists(p: Path) -> bool:
+            try:
+                return p.exists()
+            except (PermissionError, OSError):
+                return False
+
+        return any(_safe_exists(p) for p in indicators)
 
     def get_secret_scan_paths(self, target: Path) -> list[Path]:
         paths: list[Path] = []
@@ -80,8 +86,11 @@ class OpenClawProfile(BaseAgentProfile):
                 dirs.append(backup_dir)
 
         for d in [Path("/root/.openclaw/backup"), Path.home() / ".openclaw/backup"]:
-            if d.is_dir() and d not in dirs:
-                dirs.append(d)
+            try:
+                if d.is_dir() and d not in dirs:
+                    dirs.append(d)
+            except (PermissionError, OSError):
+                continue
 
         return dirs
 
@@ -119,6 +128,9 @@ class OpenClawProfile(BaseAgentProfile):
             Path("/root/.openclaw"),
         ]
         for c in candidates:
-            if c.is_dir():
-                return c
+            try:
+                if c.is_dir():
+                    return c
+            except (PermissionError, OSError):
+                continue
         return None
