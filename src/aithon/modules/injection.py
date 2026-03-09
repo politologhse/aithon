@@ -42,10 +42,11 @@ SKILL_PATTERNS: list[tuple[str, str, Severity]] = [
     (r"(?i)(?<!`)\bread\s+/etc/passwd\b(?!`)", "Data exfiltration", Severity.CRITICAL),
     (r"(?i)\boutput\s+all\s+api\s+keys\b", "Data exfiltration", Severity.CRITICAL),
     (r"(?i)\bADMIN\s+OVERRIDE\b", "Privilege escalation", Severity.CRITICAL),
-    ("\u200b", "Zero-width space (invisible injection)", Severity.HIGH),
-    ("\u200c", "Zero-width non-joiner (invisible injection)", Severity.HIGH),
-    ("\u200d", "Zero-width joiner (invisible injection)", Severity.HIGH),
-    ("\u2060", "Word joiner (invisible injection)", Severity.HIGH),
+    # Zero-width chars in skills are LOW — usually CJK copypaste, not real injection
+    ("\u200b", "Zero-width space", Severity.LOW),
+    ("\u200c", "Zero-width non-joiner", Severity.LOW),
+    ("\u200d", "Zero-width joiner", Severity.LOW),
+    ("\u2060", "Word joiner", Severity.LOW),
 ]
 
 
@@ -200,26 +201,54 @@ class InjectionModule(BaseModule):
                     if not any(h[0] == label for h in hits):
                         hits.append((label, sev, str(md_file), line_num))
 
-        # Emit one finding per skill (not per file per pattern)
-        for skill_name, hits in skill_hits.items():
-            max_sev = max(h[1] for h in hits)
-            labels = list(dict.fromkeys(h[0] for h in hits))  # unique, ordered
-            example_file = hits[0][2]
+        # Separate: skills with real threats vs zero-width-only
+        zw_labels = {"Zero-width space", "Zero-width non-joiner", "Zero-width joiner", "Word joiner"}
+        zw_only_skills: list[str] = []
 
+        for skill_name, hits in skill_hits.items():
+            labels = list(dict.fromkeys(h[0] for h in hits))
+            has_real_threat = any(lbl not in zw_labels for lbl in labels)
+
+            if has_real_threat:
+                # Emit individual finding — this skill has real injection patterns
+                max_sev = max(h[1] for h in hits)
+                example_file = hits[0][2]
+                findings.append(Finding(
+                    id=f"INJ-{len(findings) + 1:03d}",
+                    title=f"Suspicious skill: {skill_name} ({', '.join(labels)})",
+                    severity=max_sev,
+                    module=self.name,
+                    description=(
+                        f"Skill '{skill_name}' contains {len(hits)} suspicious pattern(s): "
+                        f"{', '.join(labels)}. "
+                        "Review this skill carefully — it may contain prompt injection "
+                        "or data exfiltration attempts."
+                    ),
+                    file_path=example_file,
+                    evidence=f"{len(hits)} pattern(s) in skill",
+                    remediation=f"Review and consider removing: rm -rf skills/.../{skill_name}",
+                ))
+            else:
+                # Zero-width only — collect for summary
+                zw_only_skills.append(skill_name)
+
+        # Emit one summary finding for all zero-width-only skills
+        if zw_only_skills:
             findings.append(Finding(
                 id=f"INJ-{len(findings) + 1:03d}",
-                title=f"Suspicious skill: {skill_name} ({', '.join(labels)})",
-                severity=max_sev,
+                title=f"Zero-width unicode in {len(zw_only_skills)} skills (likely CJK copypaste)",
+                severity=Severity.LOW,
                 module=self.name,
                 description=(
-                    f"Skill '{skill_name}' contains {len(hits)} suspicious pattern(s): "
-                    f"{', '.join(labels)}. "
-                    "Review this skill carefully — it may contain prompt injection "
-                    "or data exfiltration attempts."
+                    f"{len(zw_only_skills)} installed skills contain invisible zero-width "
+                    "unicode characters. This is usually a copypaste artifact from CJK "
+                    "text editors, not a real injection. Skills: "
+                    + ", ".join(zw_only_skills[:10])
+                    + ("..." if len(zw_only_skills) > 10 else "")
                 ),
-                file_path=example_file,
-                evidence=f"{len(hits)} pattern(s) in skill",
-                remediation=f"Review and consider removing: rm -rf skills/.../{skill_name}",
+                file_path=str(skills_dir),
+                evidence=f"{len(zw_only_skills)} skills with zero-width chars",
+                remediation="Low risk. Review if concerned: grep -rP '\\\\u200[bcd]' skills/",
             ))
 
         return findings
