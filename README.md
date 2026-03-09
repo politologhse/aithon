@@ -42,7 +42,7 @@ Scans AI agent workspaces for security vulnerabilities:
 ## Install
 
 ```bash
-pip install aithon
+pip install aithon-scan
 ```
 
 Or from source:
