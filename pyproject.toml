@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "aithon"
+name = "aithon-scan"
 version = "0.2.1"
 description = "Security scanner for AI coding agents"
 readme = "README.md"
@@ -45,6 +45,9 @@ Issues = "https://github.com/politologhse/aithon/issues"
 
 [project.scripts]
 aithon = "aithon.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aithon"]
 
 [tool.ruff]
 line-length = 100
