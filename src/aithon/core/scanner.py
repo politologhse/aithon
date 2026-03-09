@@ -43,6 +43,7 @@ class Scanner:
         from aithon.modules.env_leak import EnvLeakModule
         from aithon.modules.injection import InjectionModule
         from aithon.modules.network import NetworkModule
+        from aithon.modules.token_burn import TokenBurnModule
 
         available = {
             "secrets": SecretsModule,
@@ -52,6 +53,7 @@ class Scanner:
             "env_leak": EnvLeakModule,
             "injection": InjectionModule,
             "network": NetworkModule,
+            "token_burn": TokenBurnModule,
         }
 
         modules = []

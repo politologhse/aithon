@@ -22,7 +22,7 @@ class ScanConfig:
     min_severity: str = "low"
     modules: list[str] = field(default_factory=lambda: [
         "secrets", "permissions", "config_audit", "backup_scan", "env_leak",
-        "injection", "network",
+        "injection", "network", "token_burn",
     ])
 
     @property
