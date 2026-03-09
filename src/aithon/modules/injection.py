@@ -1,4 +1,4 @@
-"""Advanced prompt injection hardening checks."""
+"""Advanced prompt injection hardening checks — v2 (reduced false positives)."""
 from __future__ import annotations
 
 import json
@@ -9,24 +9,39 @@ from aithon.core.finding import Finding
 from aithon.config import Severity
 
 
-# Patterns that indicate prompt injection attempts
-INJECTION_PATTERNS: list[tuple[str, str, Severity]] = [
-    ("ignore previous instructions", "Instruction override", Severity.CRITICAL),
-    ("ignore all prior", "Instruction override", Severity.CRITICAL),
-    ("disregard all prior", "Instruction override", Severity.CRITICAL),
-    ("forget everything above", "Instruction override", Severity.CRITICAL),
-    ("new instructions:", "Instruction override", Severity.CRITICAL),
-    ("you are now", "Role hijacking", Severity.HIGH),
-    ("act as root", "Privilege escalation", Severity.CRITICAL),
-    ("pretend you are", "Role hijacking", Severity.HIGH),
-    ("from now on you", "Role hijacking", Severity.HIGH),
-    ("system:", "Fake system prompt", Severity.HIGH),
-    ("ADMIN OVERRIDE", "Privilege escalation", Severity.CRITICAL),
-    ("DEVELOPER MODE", "Privilege escalation", Severity.HIGH),
-    ("send the contents of", "Data exfiltration", Severity.CRITICAL),
-    ("output all api keys", "Data exfiltration", Severity.CRITICAL),
-    ("read /etc/passwd", "Data exfiltration", Severity.CRITICAL),
-    ("cat ~/.ssh", "Data exfiltration", Severity.CRITICAL),
+# Patterns for workspace files (agent reads these every time)
+# Format: (regex_pattern, label, severity)
+# Using regex for precision — no more naive substring matching
+WORKSPACE_PATTERNS: list[tuple[str, str, Severity]] = [
+    # Direct instruction overrides — high confidence
+    (r"(?i)^[\s>*-]*ignore\s+(all\s+)?previous\s+instructions", "Instruction override", Severity.CRITICAL),
+    (r"(?i)^[\s>*-]*disregard\s+(all\s+)?prior", "Instruction override", Severity.CRITICAL),
+    (r"(?i)^[\s>*-]*forget\s+everything\s+above", "Instruction override", Severity.CRITICAL),
+    (r"(?i)^[\s>*-]*new\s+instructions\s*:", "Instruction override", Severity.CRITICAL),
+    # Privilege escalation
+    (r"(?i)\bact\s+as\s+root\b", "Privilege escalation", Severity.CRITICAL),
+    (r"(?i)\bADMIN\s+OVERRIDE\b", "Privilege escalation", Severity.CRITICAL),
+    # Data exfiltration commands (not in code blocks)
+    (r"(?i)(?<!`)\bcat\s+~/\.ssh\b(?!`)", "Data exfiltration via SSH keys", Severity.CRITICAL),
+    (r"(?i)(?<!`)\bread\s+/etc/passwd\b(?!`)", "Data exfiltration", Severity.CRITICAL),
+    (r"(?i)\boutput\s+all\s+api\s+keys\b", "Data exfiltration", Severity.CRITICAL),
+    (r"(?i)\bsend\s+the\s+contents\s+of\b", "Data exfiltration", Severity.HIGH),
+    # Invisible unicode characters
+    ("\u200b", "Zero-width space (invisible injection)", Severity.HIGH),
+    ("\u200c", "Zero-width non-joiner (invisible injection)", Severity.HIGH),
+    ("\u200d", "Zero-width joiner (invisible injection)", Severity.HIGH),
+    ("\u2060", "Word joiner (invisible injection)", Severity.HIGH),
+]
+
+# Patterns for skills — only high-confidence dangerous patterns
+# "system:" is intentionally NOT here — too many false positives in skill docs
+SKILL_PATTERNS: list[tuple[str, str, Severity]] = [
+    (r"(?i)^[\s>*-]*ignore\s+(all\s+)?previous\s+instructions", "Instruction override", Severity.CRITICAL),
+    (r"(?i)^[\s>*-]*disregard\s+(all\s+)?prior", "Instruction override", Severity.CRITICAL),
+    (r"(?i)(?<!`)\bcat\s+~/\.ssh\b(?!`)", "Data exfiltration via SSH keys", Severity.CRITICAL),
+    (r"(?i)(?<!`)\bread\s+/etc/passwd\b(?!`)", "Data exfiltration", Severity.CRITICAL),
+    (r"(?i)\boutput\s+all\s+api\s+keys\b", "Data exfiltration", Severity.CRITICAL),
+    (r"(?i)\bADMIN\s+OVERRIDE\b", "Privilege escalation", Severity.CRITICAL),
     ("\u200b", "Zero-width space (invisible injection)", Severity.HIGH),
     ("\u200c", "Zero-width non-joiner (invisible injection)", Severity.HIGH),
     ("\u200d", "Zero-width joiner (invisible injection)", Severity.HIGH),
@@ -93,6 +108,23 @@ class InjectionModule(BaseModule):
                 ))
         return findings
 
+    def _match_pattern(self, content: str, pattern: str) -> tuple[bool, int | None]:
+        """Match pattern against content. Return (matched, line_number)."""
+        # Unicode chars — simple substring match
+        if len(pattern) == 1 and ord(pattern) > 127:
+            if pattern in content:
+                for i, line in enumerate(content.splitlines(), 1):
+                    if pattern in line:
+                        return True, i
+                return True, None
+            return False, None
+
+        # Regex patterns — match per line for line number
+        for i, line in enumerate(content.splitlines(), 1):
+            if re.search(pattern, line):
+                return True, i
+        return False, None
+
     def _check_injection_patterns(self) -> list[Finding]:
         findings: list[Finding] = []
         seen: set[str] = set()
@@ -104,16 +136,12 @@ class InjectionModule(BaseModule):
             except (PermissionError, OSError):
                 continue
 
-            for pattern, label, sev in INJECTION_PATTERNS:
-                key = f"{pattern}:{ws_file}"
+            for pattern, label, sev in WORKSPACE_PATTERNS:
+                key = f"{label}:{ws_file}"
                 if key in seen:
                     continue
-                if pattern.lower() in content.lower():
-                    line_num = None
-                    for i, line in enumerate(content.splitlines(), 1):
-                        if pattern.lower() in line.lower():
-                            line_num = i
-                            break
+                matched, line_num = self._match_pattern(content, pattern)
+                if matched:
                     seen.add(key)
                     findings.append(Finding(
                         id=f"INJ-{len(findings) + 1:03d}",
@@ -121,18 +149,19 @@ class InjectionModule(BaseModule):
                         severity=sev,
                         module=self.name,
                         description=(
-                            f"Suspicious content in agent workspace: '{pattern}'. "
+                            "Suspicious content in agent workspace file. "
                             "Could be a planted injection from a previous interaction, "
                             "a malicious skill, or a compromised inbound file."
                         ),
                         file_path=str(ws_file),
                         line_number=line_num,
-                        evidence=f"Pattern: {repr(pattern)}",
+                        evidence=f"Pattern: {label}",
                         remediation="Review file. Remove injected content. chmod 600.",
                     ))
         return findings
 
     def _check_skill_injection(self) -> list[Finding]:
+        """Check installed skills — collapse by skill, only critical patterns."""
         findings: list[Finding] = []
         oc = self.agent._find_openclaw_dir(self.config.target)
         if not oc:
@@ -142,32 +171,57 @@ class InjectionModule(BaseModule):
         if not skills_dir.is_dir():
             return findings
 
-        seen: set[str] = set()
+        # Collect hits per skill: skill_name -> [(label, severity, file, line)]
+        skill_hits: dict[str, list[tuple[str, Severity, str, int | None]]] = {}
+
         for md_file in skills_dir.rglob("*.md"):
             try:
                 content = md_file.read_text(errors="ignore")
             except (PermissionError, OSError):
                 continue
-            for pattern, label, sev in INJECTION_PATTERNS:
-                if sev < Severity.HIGH:
-                    continue
-                key = f"{pattern}:{md_file}"
-                if key in seen:
-                    continue
-                if pattern.lower() in content.lower():
-                    seen.add(key)
-                    findings.append(Finding(
-                        id=f"INJ-{len(findings) + 1:03d}",
-                        title=f"Suspicious skill: {label} in {md_file.parent.name}",
-                        severity=sev,
-                        module=self.name,
-                        description=(
-                            f"Installed skill contains: '{pattern}'. "
-                            "Skills load into agent context and can override instructions."
-                        ),
-                        file_path=str(md_file),
-                        remediation="Review skill. Remove untrusted skills.",
-                    ))
+
+            # Determine skill name from path
+            # e.g. skills/temp_skills/skills/psyb0t/mediaproc/references/setup.md
+            # -> "psyb0t/mediaproc"
+            rel = md_file.relative_to(skills_dir)
+            parts = rel.parts
+            if len(parts) >= 4 and parts[0] == "temp_skills" and parts[1] == "skills":
+                skill_name = f"{parts[2]}/{parts[3]}"
+            elif len(parts) >= 2:
+                skill_name = parts[0]
+            else:
+                skill_name = md_file.stem
+
+            for pattern, label, sev in SKILL_PATTERNS:
+                matched, line_num = self._match_pattern(content, pattern)
+                if matched:
+                    hits = skill_hits.setdefault(skill_name, [])
+                    # Deduplicate same label in same skill
+                    if not any(h[0] == label for h in hits):
+                        hits.append((label, sev, str(md_file), line_num))
+
+        # Emit one finding per skill (not per file per pattern)
+        for skill_name, hits in skill_hits.items():
+            max_sev = max(h[1] for h in hits)
+            labels = list(dict.fromkeys(h[0] for h in hits))  # unique, ordered
+            example_file = hits[0][2]
+
+            findings.append(Finding(
+                id=f"INJ-{len(findings) + 1:03d}",
+                title=f"Suspicious skill: {skill_name} ({', '.join(labels)})",
+                severity=max_sev,
+                module=self.name,
+                description=(
+                    f"Skill '{skill_name}' contains {len(hits)} suspicious pattern(s): "
+                    f"{', '.join(labels)}. "
+                    "Review this skill carefully — it may contain prompt injection "
+                    "or data exfiltration attempts."
+                ),
+                file_path=example_file,
+                evidence=f"{len(hits)} pattern(s) in skill",
+                remediation=f"Review and consider removing: rm -rf skills/.../{skill_name}",
+            ))
+
         return findings
 
     def _check_inbound_media(self) -> list[Finding]:
@@ -253,7 +307,7 @@ class InjectionModule(BaseModule):
                             module=self.name,
                             description=(
                                 f"Channel '{ch_name}' accepts DMs from anyone. "
-                                "Any user can send prompt injections directly to your agent."
+                                "Any user can send prompt injections to your agent."
                             ),
                             file_path=str(cfg_path),
                             remediation=f'Set channels.{ch_name}.dmPolicy: "pairing" or add allowFrom.',
